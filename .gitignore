@@ -1,1 +1,4 @@
 servers_rp.yaml
+
+__pycache__
+*.py[cod]
