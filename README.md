@@ -3,6 +3,14 @@
 Real-time GPU, CPU, and RAM monitoring dashboard for multiple servers via SSH.
 Two modes: **web dashboard** (browser) and **terminal TUI** (Rich).
 
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/82835508-7aad-492a-bce7-9d98b509e279"
+         controls muted autoplay loop
+         width="100%"
+         style="max-width: 100%; border-radius: 8px;">
+  </video>
+</div>
+
 ## Prerequisites
 
 - Python 3.10+
