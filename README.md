@@ -4,7 +4,7 @@ Real-time GPU, CPU, and RAM monitoring dashboard for multiple servers via SSH.
 Two modes: **web dashboard** (browser) and **terminal TUI** (Rich).
 
 <div align="center">
-  <video src="https://github.com/user-attachments/assets/82835508-7aad-492a-bce7-9d98b509e279"
+  <video src="https://github.com/user-attachments/assets/9b05aaf0-dcb5-4ed3-95b7-d51de3671ef8"
          controls muted autoplay loop
          width="100%"
          style="max-width: 100%; border-radius: 8px;">
