@@ -19,8 +19,15 @@ systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
 if [[ -f "$UNIT_FILE" ]]; then
     echo "Removing $UNIT_FILE..."
     rm -f "$UNIT_FILE"
-    systemctl --user daemon-reload
 fi
+
+ENV_FILE="$HOME/.config/gpu-dashboard.env"
+if [[ -f "$ENV_FILE" ]]; then
+    echo "Removing $ENV_FILE..."
+    rm -f "$ENV_FILE"
+fi
+
+systemctl --user daemon-reload
 
 echo ""
 echo "Service '$SERVICE_NAME' removed."

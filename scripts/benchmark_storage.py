@@ -67,7 +67,7 @@ echo ""
 echo "--- Bandwidth Tests (file_size=${{SIZE_MB}}M) ---"
 
 CANDIDATES="/ /data /mnt/nas"
-EXTRA=$(df 2>/dev/null | awk 'NR>1 && $NF ~ /^\/mnt\// {{print $NF}}' | sort -u 2>/dev/null || true)
+EXTRA=$(df 2>/dev/null | awk 'NR>1 && $NF ~ /^[/]mnt[/]/ {{print $NF}}' | sort -u 2>/dev/null || true)
 ALL_MOUNTS=$(printf '%s\\n' $CANDIDATES $EXTRA | sort -u)
 
 for MOUNT in $ALL_MOUNTS; do
