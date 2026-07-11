@@ -7,16 +7,16 @@ and produces a ranked report.
 
 Usage:
   # Test all servers
-  ./scripts/benchmark_storage.py --config servers.yaml
+  python ./scripts/benchmark_storage.py --config servers.yaml
 
   # Test only 4090 servers
-  ./scripts/benchmark_storage.py --config servers_rp.yaml --filter 4090
+  python ./scripts/benchmark_storage.py --config servers_rp.yaml --size 2048 --filter 4090
 
   # Quick test (smaller file)
-  ./scripts/benchmark_storage.py --config servers_rp.yaml --size 512 --filter 4090
+  python ./scripts/benchmark_storage.py --config servers_rp.yaml --size 512 --filter 4090
 
   # Save report to file
-  ./scripts/benchmark_storage.py --config servers.yaml --filter 4090 -o report.txt
+  python ./scripts/benchmark_storage.py --config servers.yaml --filter 4090 -o report.txt
 """
 
 from __future__ import annotations
@@ -129,8 +129,42 @@ for MOUNT in $ALL_MOUNTS; do
     $SUDO rm -f "$TESTPATH" 2>/dev/null || true
 
     FSTYPE=$(df -T "$MOUNT" 2>/dev/null | tail -1 | awk '{print $2}' || echo "unknown")
-    echo "RESULT mount=$MOUNT fstype=$FSTYPE write_mbs=$WRITE_MBS read_mbs=$READ_MBS"
+
+    # Detect disk type: SSD vs HDD vs remote vs ram
+    DISK_TYPE="unknown"
+    case "$FSTYPE" in
+        nfs|nfs4|cifs|smb|fuse.*|glusterfs|cephfs|lustre)
+            DISK_TYPE="remote" ;;
+        tmpfs|ramfs|devtmpfs)
+            DISK_TYPE="ram" ;;
+        *)
+            # Resolve the underlying block device
+            DEV=$(df "$MOUNT" 2>/dev/null | awk 'NR>1 {print $1}' | sed 's|/dev/||')
+            # Strip partition numbers: sda1→sda, nvme0n1p2→nvme0n1
+            BASE_DEV=$(echo "$DEV" | sed -E 's/p?[0-9]+$//')
+            if [[ -n "$BASE_DEV" && -f "/sys/block/$BASE_DEV/queue/rotational" ]]; then
+                ROT=$(cat "/sys/block/$BASE_DEV/queue/rotational" 2>/dev/null)
+                if [[ "$ROT" == "0" ]]; then
+                    DISK_TYPE="ssd"
+                elif [[ "$ROT" == "1" ]]; then
+                    DISK_TYPE="hdd"
+                fi
+            fi
+            ;;
+    esac
+
+    echo "RESULT mount=$MOUNT fstype=$FSTYPE disk_type=$DISK_TYPE write_mbs=$WRITE_MBS read_mbs=$READ_MBS"
 done
+
+# Print cache caveat for network filesystems
+HAS_NFS=$(df -T 2>/dev/null | awk 'NR>1 && ($2=="nfs" || $2=="nfs4") {print "1"; exit}')
+if [[ -n "$HAS_NFS" ]]; then
+    echo ""
+    echo "NOTE: 'drop_caches' only clears the local client cache, not the NFS server's"
+    echo "page cache. Since the file was just written, the NFS server still has it in"
+    echo "RAM, so read speeds for remote mounts may be inflated (server cache, not disk)."
+    echo "To get real NFS read speeds, drop caches on the NFS server or read a cold file."
+fi
 
 echo "=== DONE ==="
 '''
@@ -141,6 +175,7 @@ echo "=== DONE ==="
 class MountResult:
     mount: str
     fstype: str
+    disk_type: str
     write_mbs: float
     read_mbs: float
 
@@ -223,6 +258,7 @@ async def _run_bench_on_server(
                 sr.mount_results.append(MountResult(
                     mount=parts["mount"],
                     fstype=parts.get("fstype", "unknown"),
+                    disk_type=parts.get("disk_type", "unknown"),
                     write_mbs=float(parts.get("write_mbs", 0)),
                     read_mbs=float(parts.get("read_mbs", 0)),
                 ))
@@ -261,11 +297,19 @@ def print_report(results: list[ServerResult], size_mb: int) -> None:
 
     console = Console()
 
-    # Collect all unique mount labels
+    # Collect all unique mount labels with disk type
+    DISK_TYPE_ICONS: dict[str, str] = {
+        "ssd":     "⚡",
+        "hdd":     "🔄",
+        "remote":  "🌐",
+        "ram":     "🧠",
+        "unknown": "❓",
+    }
     all_mounts: dict[str, str] = {}
     for sr in results:
         for mr in sr.mount_results:
-            all_mounts[mr.mount] = f"{mr.mount} ({mr.fstype})"
+            icon = DISK_TYPE_ICONS.get(mr.disk_type, "❓")
+            all_mounts[mr.mount] = f"{mr.mount} {icon}{mr.disk_type} ({mr.fstype})"
     mount_order = sorted(all_mounts.keys())
 
     # ---- Main results table ------------------------------------------------
@@ -307,6 +351,19 @@ def print_report(results: list[ServerResult], size_mb: int) -> None:
                 main.add_row("", *([f"[dim](skipped: {sm})[/dim]"] + [""] * (len(mount_order) * 2 - 1)), style="dim")
 
     console.print(main)
+
+    # ---- Disk type legend --------------------------------------------------
+    from rich.text import Text
+    legend = Text.assemble(
+        ("Disk types:  ", "dim"),
+        ("⚡ SSD  ", "green"),
+        ("🔄 HDD  ", "yellow"),
+        ("🌐 remote (NFS/CIFS/…)  ", "cyan"),
+        ("🧠 RAM (tmpfs)  ", "magenta"),
+        ("❓ unknown", "dim"),
+    )
+    console.print(legend)
+    console.print()
 
     # ---- Per-mount summary ------------------------------------------------
     summary = Table(
@@ -370,6 +427,22 @@ def print_report(results: list[ServerResult], size_mb: int) -> None:
         )
 
     console.print(rank_t)
+
+    # ---- Cache caveat ----------------------------------------------------
+    from rich.panel import Panel
+    console.print()
+    console.print(Panel(
+        "[yellow]⚠️  [bold]NFS read speeds may be inflated[/bold]\n\n"
+        "[dim]'drop_caches' only clears the [italic]local[/italic] client cache, not the NFS server's "
+        "page cache. Since the file was just written, the NFS server still has it in RAM, "
+        "so read speeds for remote mounts ([cyan]nfs/nfs4[/cyan]) reflect server cache reads, "
+        "not disk reads.\n\n"
+        "To get real NFS read speeds: drop caches on the NFS server, or read a file "
+        "that hasn't been recently accessed.[/dim]",
+        title="[bold yellow]NFS Cache Caveat[/bold yellow]",
+        border_style="yellow",
+        padding=(0, 1),
+    ))
 
 
 def _bar_color_for_rich(val: float) -> str:
