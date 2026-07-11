@@ -50,81 +50,91 @@ CANDIDATE_MOUNTS: list[tuple[str, str]] = [
     # Per-server NFS mounts are discovered dynamically via df
 ]
 
-def _build_bench_script(size_mb: int, count: int) -> str:
-    """Build the benchmark bash script."""
-    return f'''#!/usr/bin/env bash
+def _build_bench_script(size_mb: int, count: int = 1) -> str:
+    """Build the benchmark bash script using simple placeholder substitution.
+
+    Uses sudo for file operations since mount points are typically
+    root-owned.  Falls back to non-sudo if the user is root or
+    sudo is not available.
+    """
+    script = r'''#!/usr/bin/env bash
 set -uo pipefail
-SIZE_MB={size_mb}
-COUNT={count}
-TESTFILE=".bandwidth_test_$$.tmp"
+SIZE_MB=_SIZE_MB_
+TESTFILE=".bw_$$.tmp"
+
+# Determine whether to use sudo for benchmark writes
+SUDO=""
+if [[ $EUID -ne 0 ]] && command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
+    SUDO="sudo"
+fi
 
 echo "=== STORAGE BENCHMARK ==="
-echo "Host: $(hostname)"
-echo ""
-echo "--- All Mounts (df) ---"
-df -h 2>/dev/null || df 2>/dev/null
-echo ""
-echo "--- Bandwidth Tests (file_size=${{SIZE_MB}}M) ---"
+echo "Host: $(hostname)  Test size: ${SIZE_MB}M"
 
 CANDIDATES="/ /data /mnt/nas"
-EXTRA=$(df 2>/dev/null | awk 'NR>1 && $NF ~ /^[/]mnt[/]/ {{print $NF}}' | sort -u 2>/dev/null || true)
-ALL_MOUNTS=$(printf '%s\\n' $CANDIDATES $EXTRA | sort -u)
+EXTRA=$(df 2>/dev/null | awk 'NR>1 && $NF ~ /^[/]mnt[/]/ {print $NF}' | sort -u 2>/dev/null || true)
+ALL_MOUNTS=$(printf '%s\n' $CANDIDATES $EXTRA | sort -u)
+
+echo "DISCOVERED: $ALL_MOUNTS"
 
 for MOUNT in $ALL_MOUNTS; do
-    [[ -d "$MOUNT" ]] || continue
+    [[ -d "$MOUNT" ]] || { echo "SKIP mount=$MOUNT reason=not_a_directory"; continue; }
     TESTPATH="$MOUNT/$TESTFILE"
+    $SUDO rm -f "$TESTPATH" 2>/dev/null || true
 
-    if ! touch "$TESTPATH" 2>/dev/null; then
-        echo "SKIP mount=$MOUNT reason=not_writable"
+    # Quick write test
+    if ! $SUDO touch "$TESTPATH" 2>/dev/null; then
+        echo "SKIP mount=$MOUNT reason=touch_failed"
         continue
     fi
-    rm -f "$TESTPATH" 2>/dev/null
+    $SUDO rm -f "$TESTPATH" 2>/dev/null || true
 
-    # ---- WRITE ----
-    rm -f "$TESTPATH" 2>/dev/null || true
+    # ---- WRITE benchmark ----
+    # Write SIZE_MB megabytes in one dd operation
     START=$(date +%s%N)
-    dd if=/dev/zero of="$TESTPATH" bs=1M count=$COUNT conv=fdatasync 2>/dev/null || \
-    dd if=/dev/zero of="$TESTPATH" bs=1M count=$COUNT 2>/dev/null || true
+    $SUDO dd if=/dev/zero of="$TESTPATH" bs=1M count=$SIZE_MB 2>/dev/null
+    RC=$?
     END=$(date +%s%N)
     ELAPSED_NS=$((END - START))
 
-    if [[ -f "$TESTPATH" && -s "$TESTPATH" ]]; then
-        FILE_SIZE=$(stat -c%s "$TESTPATH" 2>/dev/null || stat -f%z "$TESTPATH" 2>/dev/null || echo 0)
-        if [[ $FILE_SIZE -gt 0 ]]; then
-            ELAPSED_S=$(awk "BEGIN {{printf \\"%.3f\\", $ELAPSED_NS / 1000000000}}")
-            WRITE_MBS=$(awk "BEGIN {{printf \\"%.1f\\", ($FILE_SIZE / 1048576) / $ELAPSED_S}}")
-        else
-            WRITE_MBS="0"
-        fi
+    BYTES_WRITTEN=$(stat -c%s "$TESTPATH" 2>/dev/null || echo 0)
+    if [[ $RC -ne 0 || $BYTES_WRITTEN -le 0 ]]; then
+        echo "SKIP mount=$MOUNT reason=dd_write_failed_(rc=$RC_bytes=$BYTES_WRITTEN)"
+        $SUDO rm -f "$TESTPATH" 2>/dev/null || true
+        continue
+    fi
+
+    if [[ $ELAPSED_NS -gt 0 ]]; then
+        ELAPSED_S=$(awk "BEGIN {printf \"%.3f\", $ELAPSED_NS / 1000000000}")
+        WRITE_MBS=$(awk "BEGIN {printf \"%.1f\", ($BYTES_WRITTEN / 1048576) / $ELAPSED_S}")
     else
         WRITE_MBS="0"
     fi
 
-    # ---- READ ----
-    if [[ -f "$TESTPATH" && -s "$TESTPATH" ]]; then
-        sync 2>/dev/null || true
-        echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
-        START=$(date +%s%N)
-        dd if="$TESTPATH" of=/dev/null bs=1M count=$COUNT 2>/dev/null || true
-        END=$(date +%s%N)
-        ELAPSED_NS=$((END - START))
-        if [[ $ELAPSED_NS -gt 0 ]]; then
-            ELAPSED_S=$(awk "BEGIN {{printf \\"%.3f\\", $ELAPSED_NS / 1000000000}}")
-            READ_MBS=$(awk "BEGIN {{printf \\"%.1f\\", ($FILE_SIZE / 1048576) / $ELAPSED_S}}")
-        else
-            READ_MBS="0"
-        fi
+    # ---- READ benchmark ----
+    sync 2>/dev/null || true
+    echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+    START=$(date +%s%N)
+    $SUDO dd if="$TESTPATH" of=/dev/null bs=1M count=$SIZE_MB 2>/dev/null || true
+    END=$(date +%s%N)
+    ELAPSED_NS=$((END - START))
+    if [[ $ELAPSED_NS -gt 0 ]]; then
+        ELAPSED_S=$(awk "BEGIN {printf \"%.3f\", $ELAPSED_NS / 1000000000}")
+        READ_MBS=$(awk "BEGIN {printf \"%.1f\", ($BYTES_WRITTEN / 1048576) / $ELAPSED_S}")
     else
-        READ_MBS="N/A"
+        READ_MBS="0"
     fi
 
-    rm -f "$TESTPATH" 2>/dev/null || true
-    FSTYPE=$(df -T "$MOUNT" 2>/dev/null | tail -1 | awk '{{print $2}}' || echo "unknown")
+    # Cleanup
+    $SUDO rm -f "$TESTPATH" 2>/dev/null || true
+
+    FSTYPE=$(df -T "$MOUNT" 2>/dev/null | tail -1 | awk '{print $2}' || echo "unknown")
     echo "RESULT mount=$MOUNT fstype=$FSTYPE write_mbs=$WRITE_MBS read_mbs=$READ_MBS"
 done
 
 echo "=== DONE ==="
 '''
+    return script.replace("_SIZE_MB_", str(size_mb))
 
 
 @dataclass
@@ -140,6 +150,7 @@ class ServerResult:
     server_name: str
     error: str | None = None
     mount_results: list[MountResult] = field(default_factory=list)
+    skipped_mounts: list[str] = field(default_factory=list)
     raw_mounts: str = ""
 
 
@@ -182,23 +193,27 @@ async def _run_bench_on_server(
 
     sr = ServerResult(server_name=server.name)
     if result.exit_status != 0:
-        sr.error = f"Exit {result.exit_status}: {(stderr)[:200]}"
+        # Show stderr + partial stdout for debugging
+        debug = (stderr + "\n" + output).strip()[:500]
+        sr.error = f"Exit {result.exit_status}: {debug}"
         return sr
 
     # Parse output
-    sr.raw_mounts = ""
-    in_mounts = False
+    sr.raw_mounts = output[:2000]  # keep full output for inspection
     for line in output.splitlines():
         line = line.strip()
 
-        if line.startswith("--- Mounts ---"):
-            in_mounts = True
-            continue
-        if line.startswith("--- Bandwidth"):
-            in_mounts = False
-            continue
-        if in_mounts and line:
-            sr.raw_mounts += line + "\n"
+        if line.startswith("SKIP "):
+            # Format: SKIP mount=/data reason=not_writable
+            try:
+                parts = dict(
+                    item.split("=", 1) for item in line.removeprefix("SKIP ").split()
+                )
+                mount = parts.get("mount", "?")
+                reason = parts.get("reason", "?")
+                sr.skipped_mounts.append(f"{mount} ({reason})")
+            except (ValueError, KeyError):
+                sr.skipped_mounts.append(line)
 
         if line.startswith("RESULT "):
             parts = dict(
@@ -240,67 +255,101 @@ def _grade(val: float) -> str:
 
 
 def print_report(results: list[ServerResult], size_mb: int) -> None:
-    """Print a formatted bandwidth report to stdout."""
-    print()
-    print("=" * 90)
-    print(f"  STORAGE BANDWIDTH REPORT  —  {size_mb}M test file")
-    print("=" * 90)
+    """Print a formatted bandwidth report using Rich tables."""
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
 
     # Collect all unique mount labels
-    all_mounts: dict[str, str] = {}  # mount_path -> display label
+    all_mounts: dict[str, str] = {}
     for sr in results:
         for mr in sr.mount_results:
-            label = f"{mr.mount} ({mr.fstype})"
-            all_mounts[mr.mount] = label
+            all_mounts[mr.mount] = f"{mr.mount} ({mr.fstype})"
     mount_order = sorted(all_mounts.keys())
 
-    # Header
-    header = f"{'Server':<14}"
+    # ---- Main results table ------------------------------------------------
+    main = Table(
+        title=f"Storage Bandwidth Report — {size_mb}M test file",
+        title_style="bold white",
+        header_style="bold cyan",
+        expand=True,
+        padding=(0, 1),
+    )
+    main.add_column("Server", style="bold", width=14)
     for mp in mount_order:
-        header += f" | {all_mounts[mp]:^21}"
-    print(header)
-    print("-" * 90)
+        main.add_column(f"W {all_mounts[mp]}", justify="right", width=10)
+        main.add_column(f"R {all_mounts[mp]}", justify="right", width=10)
 
-    # Per-server rows
     for sr in sorted(results, key=lambda r: r.server_name):
         if sr.error and not sr.mount_results:
-            print(f"{'':>3}{sr.server_name:<11} \033[31mERROR: {sr.error}\033[0m")
+            row = [f"[red]{sr.server_name}[/red]", *["—"] * (len(mount_order) * 2)]
+            main.add_row(*row, end_section=True)
+            main.add_row("", *([f"[dim]{sr.error[:60]}[/dim]"] + [""] * (len(mount_order) * 2 - 1)))
             continue
 
-        line = f"  {sr.server_name:<12}"
+        cells = [sr.server_name]
         for mp in mount_order:
             found = next((m for m in sr.mount_results if m.mount == mp), None)
             if found:
-                cell = f"W:{_fmt(found.write_mbs)} R:{_fmt(found.read_mbs)}"
+                wc = _bar_color_for_rich(found.write_mbs)
+                rc = _bar_color_for_rich(found.read_mbs)
+                cells.append(f"[{wc}]{found.write_mbs:.1f}[/{wc}]")
+                cells.append(f"[{rc}]{found.read_mbs:.1f}[/{rc}]")
             else:
-                cell = f"{'':>15}"
-            line += f" |{cell}"
-        print(line)
+                cells.append("[dim]—[/dim]")
+                cells.append("[dim]—[/dim]")
+        main.add_row(*cells)
 
-    print("-" * 90)
+        # Skipped mounts
+        if sr.skipped_mounts:
+            for sm in sr.skipped_mounts:
+                main.add_row("", *([f"[dim](skipped: {sm})[/dim]"] + [""] * (len(mount_order) * 2 - 1)), style="dim")
 
-    # Summary: best read/write per mount across all servers
-    print("\n--- Per-Mount Summary (best server) ---")
+    console.print(main)
+
+    # ---- Per-mount summary ------------------------------------------------
+    summary = Table(
+        title="Per-Mount Best Results",
+        title_style="bold white",
+        header_style="bold cyan",
+        padding=(0, 1),
+    )
+    summary.add_column("Mount", style="bold")
+    summary.add_column("Best Write", justify="right")
+    summary.add_column("Server", justify="right")
+    summary.add_column("Best Read", justify="right")
+    summary.add_column("Server", justify="right")
+
     for mp in mount_order:
-        best_write = 0.0
-        best_read = 0.0
-        best_w_srv = ""
-        best_r_srv = ""
+        bw, bs = "", ""
+        br, rs = "", ""
+        bw_val, br_val = 0.0, 0.0
         for sr in results:
             for mr in sr.mount_results:
                 if mr.mount == mp:
-                    if mr.write_mbs > best_write:
-                        best_write = mr.write_mbs
-                        best_w_srv = sr.server_name
-                    if mr.read_mbs > best_read:
-                        best_read = mr.read_mbs
-                        best_r_srv = sr.server_name
-        print(f"  {all_mounts[mp]:<20}  "
-              f"Best Write: {_fmt(best_write)} MB/s ({best_w_srv})  "
-              f"Best Read:  {_fmt(best_read)} MB/s ({best_r_srv})")
+                    if mr.write_mbs > bw_val:
+                        bw_val = mr.write_mbs
+                        bw, bs = f"[green]{bw_val:.1f} MB/s[/green]", sr.server_name
+                    if mr.read_mbs > br_val:
+                        br_val = mr.read_mbs
+                        br, rs = f"[green]{br_val:.1f} MB/s[/green]", sr.server_name
+        summary.add_row(all_mounts.get(mp, mp), bw or "—", bs or "—", br or "—", rs or "—")
 
-    # Server ranking by avg write speed
-    print("\n--- Server Ranking (avg bandwidth across all mounts) ---")
+    console.print(summary)
+
+    # ---- Server ranking ------------------------------------------------
+    rank_t = Table(
+        title="Server Ranking (avg across mounts)",
+        title_style="bold white",
+        header_style="bold cyan",
+        padding=(0, 1),
+    )
+    rank_t.add_column("#", justify="right", style="dim")
+    rank_t.add_column("Server", style="bold")
+    rank_t.add_column("Avg Write", justify="right")
+    rank_t.add_column("Avg Read", justify="right")
+
     rankings: list[tuple[str, float, float]] = []
     for sr in results:
         if not sr.mount_results:
@@ -311,23 +360,24 @@ def print_report(results: list[ServerResult], size_mb: int) -> None:
     rankings.sort(key=lambda x: x[1], reverse=True)
 
     for rank, (name, avg_w, avg_r) in enumerate(rankings, 1):
-        print(f"  {rank:2}. {name:<12}  Avg Write: {_fmt(avg_w)} MB/s  "
-              f"Avg Read: {_fmt(avg_r)} MB/s")
+        wc = _bar_color_for_rich(avg_w)
+        rc = _bar_color_for_rich(avg_r)
+        rank_t.add_row(
+            str(rank),
+            name,
+            f"[{wc}]{avg_w:.1f} MB/s[/{wc}]",
+            f"[{rc}]{avg_r:.1f} MB/s[/{rc}]",
+        )
 
-    # NAS comparison (if available)
-    nas_results = []
-    for sr in results:
-        for mr in sr.mount_results:
-            if "nas" in mr.mount.lower():
-                nas_results.append((sr.server_name, mr))
-    if nas_results:
-        print("\n--- NAS (/mnt/nas) Comparison ---")
-        nas_results.sort(key=lambda x: x[1].write_mbs, reverse=True)
-        for name, mr in nas_results:
-            print(f"  {name:<12}  Write: {_fmt(mr.write_mbs)} MB/s  "
-                  f"Read: {_fmt(mr.read_mbs)} MB/s  ({mr.fstype})")
+    console.print(rank_t)
 
-    print("=" * 90)
+
+def _bar_color_for_rich(val: float) -> str:
+    if val <= 0:    return "dim"
+    if val < 50:    return "red"
+    if val < 200:   return "yellow"
+    if val < 500:   return "green"
+    return "bold green"
 
 
 # ---------------------------------------------------------------------------
