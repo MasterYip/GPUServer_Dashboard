@@ -112,7 +112,12 @@ def main() -> None:
             ssh_timeout=args.ssh_timeout,
         )
         # Print the actual browsable URL (0.0.0.0 isn't a valid browser address)
+        import socket
         display_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+        try:
+            display_host = socket.gethostname()
+        except Exception:
+            pass
         print(f"\n  Dashboard: http://{display_host}:{args.port}\n")
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
