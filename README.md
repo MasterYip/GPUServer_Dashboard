@@ -65,7 +65,7 @@ Server-Sent Events — no manual refresh needed.
 ### Terminal TUI
 
 ```bash
-./run_dashboard.py tui
+./run_dashboard.py tui --config servers_rp.yaml
 
 # Faster refresh
 ./run_dashboard.py tui --interval 5
