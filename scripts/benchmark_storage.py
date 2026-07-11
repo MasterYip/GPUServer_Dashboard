@@ -50,54 +50,67 @@ CANDIDATE_MOUNTS: list[tuple[str, str]] = [
     # Per-server NFS mounts are discovered dynamically via df
 ]
 
-_BENCH_TEMPLATE = r'''
-# Auto-generated storage benchmark — runs on remote server
-set -euo pipefail
-SIZE_MB=__SIZE_MB__
-COUNT=__COUNT__
+def _build_bench_script(size_mb: int, count: int) -> str:
+    """Build the benchmark bash script."""
+    return f'''#!/usr/bin/env bash
+set -uo pipefail
+SIZE_MB={size_mb}
+COUNT={count}
 TESTFILE=".bandwidth_test_$$.tmp"
 
 echo "=== STORAGE BENCHMARK ==="
 echo "Host: $(hostname)"
-
-# Discover all mount points
 echo ""
-echo "--- Mounts ---"
-df -h --output=target,size,avail,fstype 2>/dev/null | tail -n +2 || \
-df -h | awk '{{print $$NF, $$2, $$4, $$1}}'
-
+echo "--- All Mounts (df) ---"
+df -h 2>/dev/null || df 2>/dev/null
 echo ""
-echo "--- Bandwidth Tests (file_size=$${{SIZE_MB}}M) ---"
+echo "--- Bandwidth Tests (file_size=${{SIZE_MB}}M) ---"
 
-# Target mount points hardcoded + dynamically discovered NFS mounts
-for MOUNT in / /data /mnt/nas $$(df -h --output=target 2>/dev/null | grep '^/mnt/' || true); do
-    [[ -d "$$MOUNT" ]] || continue
-    [[ -w "$$MOUNT" ]] || continue
+CANDIDATES="/ /data /mnt/nas"
+EXTRA=$(df 2>/dev/null | awk 'NR>1 && $NF ~ /^\/mnt\// {{print $NF}}' | sort -u 2>/dev/null || true)
+ALL_MOUNTS=$(printf '%s\\n' $CANDIDATES $EXTRA | sort -u)
 
-    TESTPATH="$$MOUNT/$$TESTFILE"
+for MOUNT in $ALL_MOUNTS; do
+    [[ -d "$MOUNT" ]] || continue
+    TESTPATH="$MOUNT/$TESTFILE"
+
+    if ! touch "$TESTPATH" 2>/dev/null; then
+        echo "SKIP mount=$MOUNT reason=not_writable"
+        continue
+    fi
+    rm -f "$TESTPATH" 2>/dev/null
 
     # ---- WRITE ----
-    rm -f "$$TESTPATH" 2>/dev/null || true
-    START=$$(date +%s%N)
-    dd if=/dev/zero of="$$TESTPATH" bs=1M count=$$COUNT oflag=direct conv=fdatasync 2>/tmp/dd_err.$$ || true
-    END=$$(date +%s%N)
-    ELAPSED_NS=$$((END - START))
-    if [[ $$ELAPSED_NS -gt 0 ]]; then
-        ELAPSED_S=$$(awk "BEGIN {{printf \"%.3f\", $$ELAPSED_NS / 1000000000}}")
-        WRITE_MBS=$$(awk "BEGIN {{printf \"%.1f\", ($$SIZE_MB) / $$ELAPSED_S}}")
+    rm -f "$TESTPATH" 2>/dev/null || true
+    START=$(date +%s%N)
+    dd if=/dev/zero of="$TESTPATH" bs=1M count=$COUNT conv=fdatasync 2>/dev/null || \
+    dd if=/dev/zero of="$TESTPATH" bs=1M count=$COUNT 2>/dev/null || true
+    END=$(date +%s%N)
+    ELAPSED_NS=$((END - START))
+
+    if [[ -f "$TESTPATH" && -s "$TESTPATH" ]]; then
+        FILE_SIZE=$(stat -c%s "$TESTPATH" 2>/dev/null || stat -f%z "$TESTPATH" 2>/dev/null || echo 0)
+        if [[ $FILE_SIZE -gt 0 ]]; then
+            ELAPSED_S=$(awk "BEGIN {{printf \\"%.3f\\", $ELAPSED_NS / 1000000000}}")
+            WRITE_MBS=$(awk "BEGIN {{printf \\"%.1f\\", ($FILE_SIZE / 1048576) / $ELAPSED_S}}")
+        else
+            WRITE_MBS="0"
+        fi
     else
         WRITE_MBS="0"
     fi
 
     # ---- READ ----
-    if [[ -f "$$TESTPATH" ]]; then
-        START=$$(date +%s%N)
-        dd if="$$TESTPATH" of=/dev/null bs=1M count=$$COUNT iflag=direct 2>/tmp/dd_err.$$ || true
-        END=$$(date +%s%N)
-        ELAPSED_NS=$$((END - START))
-        if [[ $$ELAPSED_NS -gt 0 ]]; then
-            ELAPSED_S=$$(awk "BEGIN {{printf \"%.3f\", $$ELAPSED_NS / 1000000000}}")
-            READ_MBS=$$(awk "BEGIN {{printf \"%.1f\", ($$SIZE_MB) / $$ELAPSED_S}}")
+    if [[ -f "$TESTPATH" && -s "$TESTPATH" ]]; then
+        sync 2>/dev/null || true
+        echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+        START=$(date +%s%N)
+        dd if="$TESTPATH" of=/dev/null bs=1M count=$COUNT 2>/dev/null || true
+        END=$(date +%s%N)
+        ELAPSED_NS=$((END - START))
+        if [[ $ELAPSED_NS -gt 0 ]]; then
+            ELAPSED_S=$(awk "BEGIN {{printf \\"%.3f\\", $ELAPSED_NS / 1000000000}}")
+            READ_MBS=$(awk "BEGIN {{printf \\"%.1f\\", ($FILE_SIZE / 1048576) / $ELAPSED_S}}")
         else
             READ_MBS="0"
         fi
@@ -105,28 +118,13 @@ for MOUNT in / /data /mnt/nas $$(df -h --output=target 2>/dev/null | grep '^/mnt
         READ_MBS="N/A"
     fi
 
-    rm -f "$$TESTPATH" 2>/dev/null || true
-
-    # Get filesystem type for this mount
-    FSTYPE=$$(df -T "$$MOUNT" 2>/dev/null | tail -1 | awk '{{print $$2}}' || echo "unknown")
-
-    echo "RESULT mount=$$MOUNT fstype=$$FSTYPE write_mbs=$$WRITE_MBS read_mbs=$$READ_MBS"
+    rm -f "$TESTPATH" 2>/dev/null || true
+    FSTYPE=$(df -T "$MOUNT" 2>/dev/null | tail -1 | awk '{{print $2}}' || echo "unknown")
+    echo "RESULT mount=$MOUNT fstype=$FSTYPE write_mbs=$WRITE_MBS read_mbs=$READ_MBS"
 done
 
 echo "=== DONE ==="
 '''
-
-
-def _build_bench_script(size_mb: int, count: int) -> str:
-    """Build the benchmark script with parameters substituted."""
-    s = _BENCH_TEMPLATE.replace("__SIZE_MB__", str(size_mb))
-    s = s.replace("__COUNT__", str(count))
-    # Unescape doubled braces back to singles for the bash script
-    s = s.replace("{{", "{")
-    s = s.replace("}}", "}")
-    # Unescape doubled dollars back to singles
-    s = s.replace("$$", "$")
-    return s
 
 
 @dataclass

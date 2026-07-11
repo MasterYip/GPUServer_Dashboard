@@ -124,13 +124,38 @@ def _launch_vscode(ssh_cmd: str, server_name: str) -> str | None:
     """Launch a detached VSCode window connecting to the remote. Returns error or None."""
     code_path = shutil.which("code")
     if not code_path:
-        return "VSCode 'code' CLI not found. Install it from VSCode: Cmd+Shift+P → 'Shell Command: Install code command'"
+        return "VSCode CLI not found. Install via Cmd+Shift+P → 'Shell Command: Install code command'"
 
-    # vscode://vscode-remote/ssh-remote+user@host:port → code --remote ssh-remote+...
     # ssh_cmd is "ssh user@host -p port" — extract user@host:port
     parts = ssh_cmd.replace("ssh ", "").replace(" -p ", ":").split()
     remote = parts[0]  # user@host:port
     code_remote = f"ssh-remote+{remote}"
+
+    # Inherit the user's desktop environment so the window appears on screen
+    env = os.environ.copy()
+    if "DISPLAY" not in env:
+        # Try common DISPLAY settings
+        for d in (":0", ":1"):
+            if os.path.exists(f"/tmp/.X11-unix/X{d[1:]}"):
+                env["DISPLAY"] = d
+                break
+
+    # Detect DBus session for non-root user
+    if "DBUS_SESSION_BUS_ADDRESS" not in env:
+        try:
+            import pwd
+            uid = os.getuid()
+            user_name = pwd.getpwuid(uid).pw_name
+            # Try to find the user's dbus socket
+            dbus_path = os.path.expanduser(
+                f"~{user_name}/.dbus/session-bus/"
+            )
+            if not os.path.isdir(dbus_path):
+                dbus_path = f"/run/user/{uid}/bus"
+            if os.path.exists(dbus_path):
+                env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={dbus_path}"
+        except Exception:
+            pass
 
     try:
         subprocess.Popen(
@@ -138,6 +163,7 @@ def _launch_vscode(ssh_cmd: str, server_name: str) -> str | None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
+            env=env,
             start_new_session=True,
         )
     except OSError as exc:
@@ -246,9 +272,11 @@ def create_app(
         if not s:
             return JSONResponse({"error": f"Unknown server: {name}"}, status_code=404)
         ssh_cmd = f"ssh {s.user}@{s.host} -p {s.port}"
+        vscode_url = f"vscode://vscode-remote/ssh-remote+{s.user}@{s.host}:{s.port}"
         return {
             "name": s.name,
             "ssh_cmd": ssh_cmd,
+            "vscode_url": vscode_url,
             "host": s.host,
             "port": s.port,
             "user": s.user,

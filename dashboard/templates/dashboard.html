@@ -239,14 +239,24 @@ async function openTerminal(name) {
 
 function openVSCode(name) {
   closeAllDropdowns();
+  // First try server-side code CLI (needs DISPLAY; works from local browser)
   fetch('/api/vscode/' + name, {method: 'POST'})
     .then(r => r.json())
     .then(data => {
       if (data.ok) {
         toast('VSCode launching: ' + name);
       } else {
-        navigator.clipboard.writeText(data.ssh_cmd);
-        toast(data.error + ' — SSH command copied instead');
+        // Fallback: try vscode:// URI (works in VSCode built-in browser & Chrome)
+        sshInfo(name).then(info => {
+          var w = window.open(info.vscode_url, '_blank');
+          if (!w || w.closed) {
+            // Browser blocked the popup / protocol handler — copy SSH
+            navigator.clipboard.writeText(info.ssh_cmd);
+            toast("Can't open VSCode — SSH command copied instead");
+          } else {
+            toast('Opening VSCode Remote to ' + name + '...');
+          }
+        });
       }
     });
 }
