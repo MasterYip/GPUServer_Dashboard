@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
+from jinja2 import Environment, FileSystemLoader
 from starlette.responses import StreamingResponse
 
 from .config import load_servers
@@ -24,7 +24,13 @@ from .probe import probe_all_servers
 
 logger = logging.getLogger(__name__)
 
-TEMPLATES_DIR = Path(__file__).parent / "templates"
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+_jinja_env = Environment(
+    loader=FileSystemLoader(str(TEMPLATES_DIR)),
+    auto_reload=False,
+    cache_size=1,  # single template is enough
+)
 
 
 class AppState:
@@ -159,7 +165,6 @@ def create_app(
     server_map: dict[str, ServerConfig] = {s.name: s for s in servers}
 
     app = FastAPI(title="GPU Server Dashboard", version="1.0.0")
-    templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     state = AppState(servers=servers, interval=interval, ssh_timeout=ssh_timeout)
 
     @app.on_event("startup")
@@ -170,14 +175,12 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
-        return templates.TemplateResponse(
-            "dashboard.html",
-            {
-                "request": request,
-                "servers": state.servers,
-                "server_count": len(state.servers),
-                "interval": state.interval,
-            },
+        template = _jinja_env.get_template("dashboard.html")
+        return template.render(
+            request=request,
+            servers=state.servers,
+            server_count=len(state.servers),
+            interval=state.interval,
         )
 
     @app.get("/api/servers")

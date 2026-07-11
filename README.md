@@ -62,6 +62,28 @@ The existing `servers.yaml` is pre-populated from `server.md`.
 Open your browser to the displayed address. The dashboard auto-refreshes via
 Server-Sent Events — no manual refresh needed.
 
+### Auto-start on Boot (systemd)
+
+```bash
+# Install as a user service that starts automatically at boot
+./scripts/install_service.sh
+
+# Customize: port, config, interval
+./scripts/install_service.sh --config servers_rp.yaml --port 9090 --interval 3
+
+# Restart after config changes
+./scripts/restart_service.sh
+
+# Check status / view logs
+systemctl --user status gpu-dashboard
+journalctl --user -u gpu-dashboard -f
+
+# Remove the service
+./scripts/uninstall_service.sh
+```
+
+The service uses `loginctl enable-linger` so it starts at boot even before login.
+
 ### Terminal TUI
 
 ```bash
