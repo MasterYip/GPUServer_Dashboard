@@ -1,0 +1,79 @@
+# Group 9: clean_past_state × cross_attn_mode × cross_attn_window
+# 2×2×2 = 8 runs, dataset: g1_kimodo_nosquat
+name: cps-mode-win-ablation
+project: pegasusmodye
+description: "8-run ablation: clean_past_state × cross_attn_mode × cross_attn_window on g1_kimodo_nosquat"
+
+defaults:
+  work_dir: /data/masteryip/PegasusMoDye/PDPlanner
+  python: /data/conda/envs/pegasusmodye/bin/python
+  cfg: g1prdp_cond_diffuse.yaml
+  log_dir: /tmp/gpu-jobs
+  env:
+    OMNI_KIT_ACCEPT_EULA: "YES"
+    PYTHONPATH: /data/masteryip/PegasusMoDye/PDPlanner
+  overrides:
+    dataset.zarr_path: /data/masteryip/PegasusMoDye/RLTracker/artifacts/g1_kimodo_nosquat/motion_dyed_text_t0.01.zarr
+    training.num_epochs: 50
+    training.tqdm_interval_sec: 30
+    logging.mode: offline
+
+  path_remap:
+    - match: "4090-"
+      exclude: ["4090-3"]
+      map:
+        "/data/masteryip/": "/mnt/4090-3/masteryip/"
+        "/data/conda/": "/mnt/4090-3/conda/"
+
+command: |
+  cd {work_dir}
+  {python} train.py --cfg {cfg} --exp_name {exp_name} {overrides} >> {log_file} 2>&1
+
+tasks:
+  - name: cps0_full_global
+    overrides:
+      policy.actor.clean_past_state: false
+      policy.actor.backbone.cross_attn_mode: full
+      policy.actor.backbone.cross_attn_window: null
+
+  - name: cps0_full_w4
+    overrides:
+      policy.actor.clean_past_state: false
+      policy.actor.backbone.cross_attn_mode: full
+      policy.actor.backbone.cross_attn_window: 4
+
+  - name: cps0_state_global
+    overrides:
+      policy.actor.clean_past_state: false
+      policy.actor.backbone.cross_attn_mode: state
+      policy.actor.backbone.cross_attn_window: null
+
+  - name: cps0_state_w4
+    overrides:
+      policy.actor.clean_past_state: false
+      policy.actor.backbone.cross_attn_mode: state
+      policy.actor.backbone.cross_attn_window: 4
+
+  - name: cps1_full_global
+    overrides:
+      policy.actor.clean_past_state: true
+      policy.actor.backbone.cross_attn_mode: full
+      policy.actor.backbone.cross_attn_window: null
+
+  - name: cps1_full_w4
+    overrides:
+      policy.actor.clean_past_state: true
+      policy.actor.backbone.cross_attn_mode: full
+      policy.actor.backbone.cross_attn_window: 4
+
+  - name: cps1_state_global
+    overrides:
+      policy.actor.clean_past_state: true
+      policy.actor.backbone.cross_attn_mode: state
+      policy.actor.backbone.cross_attn_window: null
+
+  - name: cps1_state_w4
+    overrides:
+      policy.actor.clean_past_state: true
+      policy.actor.backbone.cross_attn_mode: state
+      policy.actor.backbone.cross_attn_window: 4

@@ -72,10 +72,25 @@
   .gpu-row {
     margin-bottom: 8px; padding: 6px 8px;
     background: var(--bar-bg); border-radius: 4px;
+    border-left: 3px solid transparent;
+  }
+  .gpu-row.my-gpu {
+    border-left-color: var(--blue);
+    box-shadow: inset 0 0 0 1px rgba(88,166,255,0.15);
+  }
+  .gpu-row.my-gpu .gpu-name::after {
+    content: ' ⬤';
+    color: var(--blue);
+    font-size: 0.5rem;
+    vertical-align: middle;
   }
   .gpu-row .gpu-name { font-weight: 500; font-size: 0.8rem; margin-bottom: 4px; }
   .gpu-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
-  .gpu-bar .bar-wrap { flex: 1; height: 5px; }
+  .gpu-bar .bar-wrap { flex: 1; height: 5px; position: relative; }
+  /* Stacked bar — only used when my usage data is available */
+  .bar-wrap.stacked { display: flex; }
+  .bar-wrap.stacked .bar-fill { position: absolute; height: 100%; }
+  .bar-fill.my-portion { background: var(--blue); z-index: 2; }
   .gpu-label { font-size: 0.65rem; color: var(--text-dim); width: 24px; flex-shrink: 0; }
   .gpu-val  { font-size: 0.7rem; color: var(--text-dim); white-space: nowrap; min-width: 70px; text-align: right; }
   .gpu-extras { font-size: 0.65rem; color: var(--text-dim); margin-top: 2px; }
@@ -183,11 +198,46 @@
 
 <script>
 const INTERVAL = {{ interval }};
+let myGPUUsage = {};  // {server: {gpu: {my_util_pct, my_mem_mb, total_util_pct, total_mem_mb}}}
+
+// Refresh "my GPU" usage data every 30s
+async function refreshMyUsage() {
+  try {
+    const r = await fetch('/api/my-gpu-usage');
+    myGPUUsage = await r.json() || {};
+  } catch(e) { myGPUUsage = {}; }
+}
+refreshMyUsage();
+setInterval(refreshMyUsage, 30000);
 
 function barClass(pct) {
   if (pct < 60) return 'low';
   if (pct < 85) return 'mid';
   return 'high';
+}
+
+/** Build a bar HTML string. If stackedData is provided, renders a two-color stacked bar. */
+function barHTML(pct, cls, label, stackedData) {
+  if (stackedData && stackedData.my_util_pct > 0) {
+    // Two-color stacked bar: blue = my portion, normal = rest
+    const myPct = Math.min(stackedData.my_util_pct, pct);
+    const otherPct = pct - myPct;
+    const otherCls = barClass(pct);  // color based on total
+    return '<div class="gpu-bar">' +
+      '<span class="gpu-label">' + label + '</span>' +
+      '<div class="bar-wrap" style="position:relative">' +
+        '<div class="bar-fill ' + otherCls + '" style="position:absolute;left:0;width:' + pct + '%"></div>' +
+        '<div class="bar-fill my-portion" style="position:absolute;left:0;width:' + myPct + '%"></div>' +
+      '</div>' +
+      '<span class="gpu-val">' + pct + '%</span>' +
+    '</div>';
+  }
+  // Standard single-color bar
+  return '<div class="gpu-bar">' +
+    '<span class="gpu-label">' + label + '</span>' +
+    '<div class="bar-wrap"><div class="bar-fill ' + cls + '" style="width:' + pct + '%"></div></div>' +
+    '<span class="gpu-val">' + pct + '%</span>' +
+  '</div>';
 }
 
 function timeAgo(ts) {
@@ -313,18 +363,37 @@ function updateCard(name, m) {
       const tempStr = g.temperature_gpu != null ? g.temperature_gpu + '°C' : '';
       const powerStr = g.power_draw_w != null ? g.power_draw_w + 'W' : '';
       const extras = [tempStr, powerStr].filter(Boolean).join(' · ');
-      return '<div class="gpu-row">' +
-        '<div class="gpu-name">GPU' + g.index + ': ' + g.name + '</div>' +
-        '<div class="gpu-bar">' +
-          '<span class="gpu-label">GPU</span>' +
-          '<div class="bar-wrap"><div class="bar-fill ' + gpuCls + '" style="width:' + g.utilization_gpu + '%"></div></div>' +
-          '<span class="gpu-val">' + g.utilization_gpu + '%</span>' +
-        '</div>' +
-        '<div class="gpu-bar">' +
+
+      // Check for "my" usage data for stacked bars
+      const myData = (myGPUUsage[name] && myGPUUsage[name][g.index]) || null;
+      const isMine = !!myData;
+      const rowCls = isMine ? 'gpu-row my-gpu' : 'gpu-row';
+
+      // Build memory bar: stacked if we have my data, otherwise standard
+      let memBar;
+      if (isMine && myData.my_mem_mb > 0) {
+        const myMemPct = Math.round(myData.my_mem_mb / g.memory_total_mb * 100);
+        const otherMemPct = memPct - myMemPct;
+        memBar = '<div class="gpu-bar">' +
+          '<span class="gpu-label">MEM</span>' +
+          '<div class="bar-wrap" style="position:relative">' +
+            '<div class="bar-fill ' + memCls + '" style="position:absolute;left:0;width:' + memPct + '%"></div>' +
+            '<div class="bar-fill my-portion" style="position:absolute;left:0;width:' + myMemPct + '%"></div>' +
+          '</div>' +
+          '<span class="gpu-val">' + memPct + '% ' + memUsed + '/' + memTotal + 'G</span>' +
+        '</div>';
+      } else {
+        memBar = '<div class="gpu-bar">' +
           '<span class="gpu-label">MEM</span>' +
           '<div class="bar-wrap"><div class="bar-fill ' + memCls + '" style="width:' + memPct + '%"></div></div>' +
           '<span class="gpu-val">' + memPct + '% ' + memUsed + '/' + memTotal + 'G</span>' +
-        '</div>' +
+        '</div>';
+      }
+
+      return '<div class="' + rowCls + '">' +
+        '<div class="gpu-name">GPU' + g.index + ': ' + g.name + '</div>' +
+        barHTML(g.utilization_gpu, gpuCls, 'GPU', myData) +
+        memBar +
         (extras ? '<div class="gpu-extras">' + extras + '</div>' : '') +
       '</div>';
     }).join('');

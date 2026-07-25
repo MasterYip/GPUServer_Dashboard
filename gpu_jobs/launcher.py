@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Optional
 
 import asyncssh
@@ -94,7 +95,14 @@ async def launch_job(
 
         # Inject CUDA_VISIBLE_DEVICES directly on the python command line
         # (more reliable than export through screen's bash -c)
+        pid_file = os.path.join(job.defaults.log_dir, job.project, job.name, f"{task.name}.pid")
         cmd = cmd.replace("\n", f"\nCUDA_VISIBLE_DEVICES={gpu.gpu_index} ", 1)
+        # Capture PID: wrap python in subshell that writes PID to file
+        cmd = cmd.replace(
+            f"{job.defaults.python} ",
+            f"bash -c 'echo $$ > {pid_file}; exec {job.defaults.python} \"$@\"' -- ",
+            1,
+        )
 
         full_cmd = (
             f"mkdir -p {job.defaults.log_dir}/{job.project}/{job.name} && "
