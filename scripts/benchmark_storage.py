@@ -478,7 +478,7 @@ async def _main() -> None:
         help="Number of test blocks (increases accuracy but takes longer; default: 1)",
     )
     parser.add_argument(
-        "--timeout", type=int, default=60,
+        "--timeout", type=int, default=120,
         help="SSH timeout per server in seconds",
     )
     parser.add_argument(

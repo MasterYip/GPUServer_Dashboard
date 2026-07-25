@@ -1,0 +1,51 @@
+# Example: Cross-attention window ablation for PegasusMoDye PDPlanner
+#
+# Each task = one GPU. The scheduler auto-assigns tasks to the best free GPUs.
+#
+# Run:   gpu-jobs run job_configs/pegasusmodye/example_ablation.yaml
+# Dry:   gpu-jobs run job_configs/pegasusmodye/example_ablation.yaml --dry-run
+
+name: cross-attn-window-ablation
+project: pegasusmodye
+description: "5-variant cross_attn_window ablation on normal_loco dataset"
+
+defaults:
+  work_dir: /data/masteryip/PegasusMoDye/PDPlanner
+  python: /data/conda/envs/pegasusmodye/bin/python
+  cfg: g1prdp_cond_diffuse.yaml
+  log_dir: /tmp/gpu-jobs
+  env:
+    OMNI_KIT_ACCEPT_EULA: "YES"
+    PYTHONPATH: /data/masteryip/PegasusMoDye/PDPlanner
+  overrides:
+    dataset_dir: /data/masteryip/PegasusMoDye/PDPlanner/data/normal_loco/
+    training.num_epochs: 50
+    training.tqdm_interval_sec: 30
+    logging.mode: offline
+
+# Shell template — {var_name} substituted at launch time.
+# Special vars: {exp_name}, {overrides}, {log_file}
+command: |
+  cd {work_dir}
+  {python} train.py --cfg {cfg} --exp_name {exp_name} {overrides} >> {log_file} 2>&1
+
+tasks:
+  - name: win0
+    overrides:
+      policy.actor.backbone.cross_attn_window: 0
+
+  - name: win2
+    overrides:
+      policy.actor.backbone.cross_attn_window: 2
+
+  - name: win4
+    overrides:
+      policy.actor.backbone.cross_attn_window: 4
+
+  - name: win8
+    overrides:
+      policy.actor.backbone.cross_attn_window: 8
+
+  - name: win_global
+    overrides:
+      policy.actor.backbone.cross_attn_window: null
