@@ -48,10 +48,15 @@ def cmd_probe(args: argparse.Namespace) -> None:
     if args.prefer:
         preferred = [s.strip() for s in args.prefer.split(",")]
 
+    allowed = None
+    if getattr(args, "only_servers", None):
+        allowed = {s.strip() for s in args.only_servers.split(",")}
+
     async def _run():
         candidates = await probe_and_rank(
             _default_servers(),
             preferred_servers=preferred,
+            allowed_servers=allowed,
             ssh_timeout=args.ssh_timeout,
         )
         if not candidates:
@@ -96,6 +101,10 @@ def cmd_run(args: argparse.Namespace) -> None:
     if args.prefer:
         preferred = [s.strip() for s in args.prefer.split(",")]
 
+    allowed = None
+    if getattr(args, "only_servers", None):
+        allowed = {s.strip() for s in args.only_servers.split(",")}
+
     async def _run():
         record = await launch_job(
             job,
@@ -103,6 +112,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             dry_run=args.dry_run,
             max_gpus=args.max_gpus,
             preferred_servers=preferred,
+            allowed_servers=allowed,
             ssh_timeout=args.ssh_timeout,
         )
 
@@ -186,6 +196,7 @@ def main() -> None:
     p_probe = subs.add_parser("probe", help="Probe servers, show free GPUs")
     p_probe.add_argument("--prefer", help="Comma-separated preferred server names")
     p_probe.add_argument("--min-mem", type=float, default=0, help="Min free memory (MB)")
+    p_probe.add_argument("--only-servers", help="Comma-separated server names to restrict to")
     p_probe.add_argument("--ssh-timeout", type=int, default=8)
 
     # --- run ---
@@ -194,6 +205,7 @@ def main() -> None:
     p_run.add_argument("--dry-run", action="store_true", help="Print assignments, don't launch")
     p_run.add_argument("--max-gpus", type=int, default=999, help="Max GPUs to use")
     p_run.add_argument("--prefer", help="Comma-separated preferred server names")
+    p_run.add_argument("--only-servers", help="Comma-separated server names to restrict to")
     p_run.add_argument("--ssh-timeout", type=int, default=10)
 
     # --- list ---

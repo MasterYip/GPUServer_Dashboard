@@ -109,6 +109,7 @@ $PY cli.py kill my-job --task variant-a  # kill one task
 - **Job YAMLs go in `job_configs/<project>/`**, one YAML per job. Keep them checked into git so runs are reproducible.
 - **Log paths are deterministic**: `/tmp/gpu-jobs/<project>/<job_name>/<task>.log` on the remote server. Use `cli.py tail` to read them; don't construct SSH commands manually.
 - **Kill before re-launching** the same job if you need to restart.
-- **Prefer 4090-3** for PegasusMoDye runs (it has the canonical filesystem). Use other 4090 servers only when 4090-3 is full.
-- **H20/H200** servers have their own conda environments — job YAMLs targeting them need different `python` and `work_dir` paths in `defaults`.
+- **Prefer 4090-3** for PegasusMoDye runs (it has the canonical filesystem). Use other 4090 servers (4090-1/2/4/5) only when 4090-3 is full.
+- **4090-48-6/7 and H20/H200** servers have their own local storage — they do NOT mount 4090-3's filesystem. Job YAMLs targeting them need different `python` and `work_dir` paths in `defaults`.
+- **Only 4090-1 through 4090-5** share the data disk via `/mnt/4090-3/`. Always use `--prefer 4090-3,4090-1,4090-2,4090-4,4090-5` for PegasusMoDye runs.
 - **Screen sessions** are named `gpu-<task_name>`. To attach manually: `ssh <server> -t screen -r gpu-<task_name>`.

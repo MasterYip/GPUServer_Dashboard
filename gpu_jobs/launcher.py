@@ -24,13 +24,18 @@ SCREEN_PREFIX = "gpu-"
 async def probe_and_rank(
     config_path: str,
     preferred_servers: Optional[list[str]] = None,
+    allowed_servers: Optional[set[str]] = None,
     ssh_timeout: int = 8,
 ) -> list[GpuCandidate]:
     """Probe all servers and return ranked free GPU candidates."""
     servers = load_servers(config_path)
     metrics = await probe_all_servers(servers, timeout=ssh_timeout)
     host_map = {s.name: (s.host, s.port) for s in servers}
-    candidates = find_free_gpus(metrics, preferred_servers=preferred_servers)
+    candidates = find_free_gpus(
+        metrics,
+        preferred_servers=preferred_servers,
+        allowed_servers=allowed_servers,
+    )
     return resolve_host_port(candidates, host_map)
 
 
@@ -40,6 +45,7 @@ async def launch_job(
     dry_run: bool = False,
     max_gpus: int = 999,
     preferred_servers: Optional[list[str]] = None,
+    allowed_servers: Optional[set[str]] = None,
     ssh_timeout: int = 10,
 ) -> JobRecord:
     """Probe, assign GPUs, and launch all tasks in a job."""
@@ -51,7 +57,11 @@ async def launch_job(
     metrics = await probe_all_servers(servers, timeout=ssh_timeout)
     host_map = {s.name: (s.host, s.port) for s in servers}
 
-    candidates = find_free_gpus(metrics, preferred_servers=preferred_servers)
+    candidates = find_free_gpus(
+        metrics,
+        preferred_servers=preferred_servers,
+        allowed_servers=allowed_servers,
+    )
     candidates = resolve_host_port(candidates, host_map)
 
     if len(candidates) < len(tasks_to_launch):

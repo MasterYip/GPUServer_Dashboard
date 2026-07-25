@@ -12,6 +12,7 @@ def find_free_gpus(
     max_gpu_util_pct: float = 30.0,
     preferred_servers: list[str] | None = None,
     exclude_gpus: set[tuple[str, int]] | None = None,
+    allowed_servers: set[str] | None = None,
 ) -> list[GpuCandidate]:
     """Scan all server metrics and return ranked free GPU candidates.
 
@@ -27,6 +28,8 @@ def find_free_gpus(
         Server names to prioritize (2× score multiplier).
     exclude_gpus : set[tuple[str, int]] | None
         (server_name, gpu_index) pairs to exclude (already assigned).
+    allowed_servers : set[str] | None
+        If set, only consider GPUs from these server names (others are skipped).
 
     Returns
     -------
@@ -39,6 +42,8 @@ def find_free_gpus(
 
     for name, m in metrics.items():
         if m.error:
+            continue
+        if allowed_servers is not None and name not in allowed_servers:
             continue
         for gpu in m.gpu_info:
             if (name, gpu.index) in excluded:

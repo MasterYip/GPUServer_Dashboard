@@ -1,0 +1,26 @@
+# Quick test training run — verifies orchestrator + GPU + config end-to-end
+name: test-train
+project: pegasusmodye
+description: "Single-GPU test training run (minimal epochs)"
+
+defaults:
+  work_dir: /data/masteryip/PegasusMoDye/PDPlanner
+  python: /data/conda/envs/pegasusmodye/bin/python
+  cfg: g1prdp_cond_diffuse.yaml
+  log_dir: /tmp/gpu-jobs
+  env:
+    OMNI_KIT_ACCEPT_EULA: "YES"
+    PYTHONPATH: /data/masteryip/PegasusMoDye/PDPlanner
+  overrides:
+    dataset_dir: /data/masteryip/PegasusMoDye/PDPlanner/data/normal_loco/
+    training.num_epochs: 5
+    training.tqdm_interval_sec: 30
+    logging.mode: offline
+
+command: |
+  cd {work_dir}
+  {python} train.py --cfg {cfg} --exp_name {exp_name} {overrides} >> {log_file} 2>&1
+
+tasks:
+  - name: test-train-run
+    overrides: {}
