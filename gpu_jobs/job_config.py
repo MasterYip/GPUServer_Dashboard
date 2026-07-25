@@ -70,9 +70,8 @@ def build_task_command(
     log_file : str
         Full path for the task's log file.
     server_name : str
-        Server name. If it's a 4090-series server (not 4090-3), substitute
-        /data/ paths with /mnt/4090-3/ equivalents. H20/H200 servers use
-        paths as-is (they have their own local environments).
+        Server name. Path remapping is applied from config.defaults.path_remap
+        (first matching rule wins).
 
     Returns
     -------
@@ -102,14 +101,12 @@ def build_task_command(
     for key, val in vars_dict.items():
         cmd = cmd.replace("{" + key + "}", str(val))
 
-    # For 4090-series non-primary servers, remap /data/ paths → /mnt/4090-3/
-    # H20/H200 servers use their own local paths — no remapping.
-    _needs_remap = (
-        server_name.startswith("4090-") and server_name != "4090-3"
-    )
-    if _needs_remap:
-        cmd = cmd.replace("/data/masteryip/", "/mnt/4090-3/masteryip/")
-        cmd = cmd.replace("/data/conda/", "/mnt/4090-3/conda/")
+    # Apply path remapping rules from YAML config (first match wins)
+    for rule in config.defaults.path_remap:
+        if server_name.startswith(rule.match) and server_name not in rule.exclude:
+            for find, replace in rule.map.items():
+                cmd = cmd.replace(find, replace)
+            break
 
     return cmd.strip()
 

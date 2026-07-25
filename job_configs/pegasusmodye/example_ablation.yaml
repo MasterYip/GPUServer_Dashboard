@@ -23,6 +23,15 @@ defaults:
     training.tqdm_interval_sec: 30
     logging.mode: offline
 
+  # Path remapping: on non-primary 4090 servers, /data/... → NFS mount /mnt/4090-3/...
+  # H20/H200 and 4090-48-6/7 use their own local storage — not matched, so no remap.
+  path_remap:
+    - match: "4090-"
+      exclude: ["4090-3"]
+      map:
+        "/data/masteryip/": "/mnt/4090-3/masteryip/"
+        "/data/conda/": "/mnt/4090-3/conda/"
+
 # Shell template — {var_name} substituted at launch time.
 # Special vars: {exp_name}, {overrides}, {log_file}
 command: |

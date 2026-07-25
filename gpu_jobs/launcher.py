@@ -92,6 +92,10 @@ async def launch_job(
         )
         cmd = build_task_command(job, task, log_file, server_name=gpu.server_name)
 
+        # Inject CUDA_VISIBLE_DEVICES directly on the python command line
+        # (more reliable than export through screen's bash -c)
+        cmd = cmd.replace("\n", f"\nCUDA_VISIBLE_DEVICES={gpu.gpu_index} ", 1)
+
         full_cmd = (
             f"mkdir -p {job.defaults.log_dir}/{job.project}/{job.name} && "
             f"screen -dmS {screen_name} bash -c '{cmd}'"

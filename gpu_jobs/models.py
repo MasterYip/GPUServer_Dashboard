@@ -36,6 +36,18 @@ class TaskSpec(BaseModel):
     gpu_min_memory_mb: int = 4000
 
 
+class PathRemapRule(BaseModel):
+    """Server-name-based path substitution rule.
+
+    If *server_name* starts with ``match`` and is NOT in ``exclude``,
+    each key→value in ``map`` is applied as a string replace on the command.
+    """
+
+    match: str
+    exclude: list[str] = []
+    map: dict[str, str] = {}
+
+
 class JobDefaults(BaseModel):
     """Shared settings merged into every task."""
 
@@ -45,6 +57,7 @@ class JobDefaults(BaseModel):
     log_dir: str = "/tmp/gpu-jobs"
     env: dict[str, str] = {}
     overrides: dict[str, Any] = {}
+    path_remap: list[PathRemapRule] = []
 
 
 class JobConfig(BaseModel):

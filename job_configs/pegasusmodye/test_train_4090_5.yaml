@@ -1,7 +1,7 @@
-# Quick test training run — verifies orchestrator + GPU + config end-to-end
-name: test-train
+# Test training run on 4090-5
+name: test-train-4090-5
 project: pegasusmodye
-description: "Single-GPU test training run (minimal epochs)"
+description: "Single-GPU test training run on 4090-5"
 
 defaults:
   work_dir: /data/masteryip/PegasusMoDye/PDPlanner
@@ -14,7 +14,7 @@ defaults:
   overrides:
     # Use absolute zarr path — avoids broken symlinks on non-primary servers
     dataset.zarr_path: /data/masteryip/PegasusMoDye/RLTracker/artifacts/normal_loco/motion_dyed_text_t0.01.zarr
-    training.num_epochs: 20
+    training.num_epochs: 5
     training.tqdm_interval_sec: 30
     logging.mode: offline
 
@@ -30,5 +30,5 @@ command: |
   {python} train.py --cfg {cfg} --exp_name {exp_name} {overrides} >> {log_file} 2>&1
 
 tasks:
-  - name: test-train-run
+  - name: test-4090-5
     overrides: {}
