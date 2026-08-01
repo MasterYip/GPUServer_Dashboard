@@ -95,6 +95,7 @@ def build_task_command(
         "project": config.project,
         "job_name": config.name,
         "task_name": task.name,
+        "exp_group": config.defaults.exp_group,
     }
 
     cmd = config.command

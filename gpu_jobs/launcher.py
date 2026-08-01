@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from typing import Optional
 
 import asyncssh
@@ -20,6 +21,151 @@ from .scheduler import find_free_gpus, resolve_host_port
 logger = logging.getLogger(__name__)
 
 SCREEN_PREFIX = "gpu-"
+
+
+# ── Pre-flight check ────────────────────────────────────────────────────────
+
+
+@dataclass
+class PreflightResult:
+    """Result of a pre-flight check on a candidate server."""
+    ok: bool
+    errors: list[str]
+    # Diagnosed per-server paths (after remap), used to skip redundant checks
+    log_dir_parent: str = ""
+
+
+async def _preflight_for_server(
+    host: str,
+    port: int,
+    identity_file: str | None,
+    work_dir: str,
+    python_path: str,
+    log_dir_parent: str,
+    ssh_timeout: int = 8,
+) -> PreflightResult:
+    """Run a single pre-flight SSH check on a server.
+
+    Checks that:
+      1. ``work_dir`` exists and is a directory
+      2. ``python_path`` exists and is executable
+      3. The parent of ``log_dir_parent`` (e.g. ``/tmp/gpu-jobs``) either exists
+         & is writable, or its parent is writable so ``mkdir -p`` will work
+      4. At least 10 MB of free space on the filesystem hosting the log dir
+    """
+    errors: list[str] = []
+    # Escape paths for safe shell embedding
+    check_script = (
+        f"test -d '{work_dir}' || echo 'ERR:work_dir_missing:{work_dir}';"
+        f"test -x '{python_path}' || echo 'ERR:python_missing:{python_path}';"
+        # Try mkdir -p on the target log directory — this is what screen launch does.
+        f"mkdir -p '{log_dir_parent}' 2>/dev/null;"
+        f"if [ ! -d '{log_dir_parent}' ]; then echo 'ERR:log_dir_failed:{log_dir_parent}';"
+        # Only check disk space if log dir exists (avoids redundant df failure)
+        f"elif ! df -BM --output=avail '{log_dir_parent}' 2>/dev/null | tail -1 | grep -q .; then echo 'ERR:df_failed:{log_dir_parent}';"
+        f"fi"
+    )
+
+    try:
+        ck: dict = {"known_hosts": None}
+        if identity_file:
+            ck["client_keys"] = [identity_file]
+        async with asyncssh.connect(
+            host, port=port, username="user", **ck,
+        ) as conn:
+            result = await asyncio.wait_for(
+                conn.run(check_script, check=False),
+                timeout=ssh_timeout,
+            )
+            stdout = (result.stdout or "").strip()
+
+            if result.exit_status != 0 and "ERR:" not in stdout:
+                stderr = (result.stderr or "").strip()
+                errors.append(f"preflight exited {result.exit_status}: {stderr[:200]}")
+                return PreflightResult(ok=False, errors=errors)
+
+            # Parse ERR: lines from stdout
+            for line in stdout.splitlines():
+                if line.startswith("ERR:"):
+                    parts = line.split(":", 2)
+                    code = parts[1] if len(parts) > 1 else "unknown"
+                    detail = parts[2] if len(parts) > 2 else line
+                    if code == "work_dir_missing":
+                        errors.append(f"work_dir does not exist: {detail}")
+                    elif code == "python_missing":
+                        errors.append(f"python binary not found: {detail}")
+                    elif code == "log_dir_failed":
+                        errors.append(f"cannot create log directory: {detail}")
+                    elif code == "df_failed":
+                        errors.append(f"cannot check disk space on log dir: {detail}")
+                    else:
+                        errors.append(f"preflight: {line}")
+
+            return PreflightResult(ok=len(errors) == 0, errors=errors)
+
+    except (OSError, asyncssh.Error, asyncio.TimeoutError) as exc:
+        return PreflightResult(ok=False, errors=[f"SSH failed: {exc}"])
+
+
+async def _run_preflight_checks(
+    candidates: list[GpuCandidate],
+    server_info: dict[str, tuple[str, int, str | None]],
+    work_dir: str,
+    python_path: str,
+    log_dir: str,
+    project: str,
+    job_name: str,
+    path_remap_rules: list,
+    ssh_timeout: int = 8,
+) -> dict[str, PreflightResult]:
+    """Run pre-flight checks on each unique server among candidates, in parallel.
+
+    Applies per-server path remapping so that non-primary servers are checked
+    with their actual (remapped) paths.
+
+    Returns a dict mapping ``server_name`` → ``PreflightResult``.
+    """
+    seen: set[str] = set()
+    tasks: dict[str, asyncio.Task[PreflightResult]] = {}
+
+    for c in candidates:
+        if c.server_name in seen:
+            continue
+        seen.add(c.server_name)
+        info = server_info.get(c.server_name)
+        if not info:
+            continue
+        host, port, id_file = info
+
+        # Apply path remap rules for this server (same logic as build_task_command)
+        wd = _apply_path_remap(work_dir, c.server_name, path_remap_rules)
+        py = _apply_path_remap(python_path, c.server_name, path_remap_rules)
+        ld = _apply_path_remap(log_dir, c.server_name, path_remap_rules)
+        log_dir_parent = os.path.join(ld, project, job_name)
+
+        tasks[c.server_name] = asyncio.create_task(
+            _preflight_for_server(
+                host=host, port=port, identity_file=id_file,
+                work_dir=wd, python_path=py,
+                log_dir_parent=log_dir_parent,
+                ssh_timeout=ssh_timeout,
+            )
+        )
+
+    results: dict[str, PreflightResult] = {}
+    for name, task in tasks.items():
+        results[name] = await task
+    return results
+
+
+def _apply_path_remap(path: str, server_name: str, rules: list) -> str:
+    """Apply path remapping rules from job YAML config (first match wins)."""
+    for rule in rules:
+        if server_name.startswith(rule.match) and server_name not in rule.exclude:
+            for find, replace in rule.map.items():
+                path = path.replace(find, replace)
+            break
+    return path
 
 
 async def probe_and_rank(
@@ -48,6 +194,7 @@ async def launch_job(
     preferred_servers: Optional[list[str]] = None,
     allowed_servers: Optional[set[str]] = None,
     ssh_timeout: int = 10,
+    no_preflight: bool = False,
 ) -> JobRecord:
     """Probe, assign GPUs, and launch all tasks in a job."""
     tasks_to_launch = job.tasks[:max_gpus]
@@ -75,11 +222,39 @@ async def launch_job(
     for s in servers:
         server_info[s.name] = (s.host, s.port, s.identity_file)
 
+    # ── Pre-flight check ──────────────────────────────────────────────
+    failed_servers: set[str] = set()
+    if not no_preflight:
+        preflight_results = await _run_preflight_checks(
+            candidates=candidates,
+            server_info=server_info,
+            work_dir=job.defaults.work_dir,
+            python_path=job.defaults.python,
+            log_dir=job.defaults.log_dir,
+            project=job.project,
+            job_name=job.name,
+            path_remap_rules=job.defaults.path_remap,
+            ssh_timeout=ssh_timeout,
+        )
+        for name, pr in preflight_results.items():
+            if not pr.ok:
+                failed_servers.add(name)
+        if failed_servers:
+            print()
+            for name in sorted(failed_servers):
+                pr = preflight_results[name]
+                for e in pr.errors:
+                    print(f"  PREFLIGHT FAIL [{name}]: {e}")
+            print()
+
+        # Remove candidates whose server failed pre-flight
+        candidates = [c for c in candidates if c.server_name not in failed_servers]
+
     records: list[LaunchRecord] = []
 
     for i, task in enumerate(tasks_to_launch):
         if i >= len(candidates):
-            print(f"  SKIP {task.name}: no free GPU")
+            print(f"  SKIP {task.name}: no free GPU (preflight removed all candidates)")
             records.append(LaunchRecord(
                 name=task.name, server="", gpu=-1,
                 screen_session="", log_file="", status="dead",

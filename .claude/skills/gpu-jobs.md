@@ -7,7 +7,7 @@ running tasks across a multi-server GPU cluster.
 
 ```
 /gpu-jobs probe [--prefer S1,S2]
-/gpu-jobs run <job.yaml> [--dry-run]
+/gpu-jobs run <job.yaml> [--dry-run] [--no-preflight]
 /gpu-jobs list [--project X]
 /gpu-jobs kill <job> [--task T]
 /gpu-jobs tail <job> [--task T] [--lines N]
@@ -90,7 +90,15 @@ Prints the exact command, GPU assignment, and log path for each task. **Always s
 $PY cli.py run job_configs/<project>/<name>.yaml
 ```
 
-Each task launches in a `screen -dmS gpu-<task_name>` session on the assigned server. Log files go to `/tmp/gpu-jobs/<project>/<job_name>/<task>.log`. A registry record is saved to `~/.cache/gpu-jobs/registry.json`.
+**Pre-flight check (automatic, since v2)**: Before launching, the orchestrator SSHs to each candidate server and verifies:
+- `work_dir` exists (with path remapping applied)
+- `python` binary exists and is executable
+- Log directory can be created via `mkdir -p`
+- Filesystem hosting the log dir has free space
+
+Servers that fail pre-flight are excluded and tasks are reassigned to healthy servers. To skip pre-flight checks, pass `--no-preflight`.
+
+Each task launches in a `screen -dmS gpu-<task_name>` session on the assigned server. Log files go to `{log_dir}/<project>/<job_name>/<task>.log`.
 
 ### 5. Monitor & Manage
 
@@ -107,7 +115,8 @@ $PY cli.py kill my-job --task variant-a  # kill one task
 - **Always dry-run first** and present the output to the user.
 - **Never edit servers_rp.yaml** — it contains production server IPs.
 - **Job YAMLs go in `job_configs/<project>/`**, one YAML per job. Keep them checked into git so runs are reproducible.
-- **Log paths are deterministic**: `/tmp/gpu-jobs/<project>/<job_name>/<task>.log` on the remote server. Use `cli.py tail` to read them; don't construct SSH commands manually.
+- **Log paths are deterministic**: `{log_dir}/<project>/<job_name>/<task>.log` on the remote server. Use `cli.py tail` to read them; don't construct SSH commands manually.
+- **Avoid `/tmp` for `log_dir` on edge servers**: 4090-1/2/4/5 have limited tmpfs. Use `log_dir: /home/user/tmp/gpu-jobs` or a path under `work_dir/../logs` instead. The pre-flight check will catch this before launch.
 - **Kill before re-launching** the same job if you need to restart.
 - **Prefer 4090-3** for PegasusMoDye runs (it has the canonical filesystem). Use other 4090 servers (4090-1/2/4/5) only when 4090-3 is full.
 - **4090-48-6/7 and H20/H200** servers have their own local storage — they do NOT mount 4090-3's filesystem. Job YAMLs targeting them need different `python` and `work_dir` paths in `defaults`.

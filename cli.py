@@ -114,6 +114,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             preferred_servers=preferred,
             allowed_servers=allowed,
             ssh_timeout=args.ssh_timeout,
+            no_preflight=args.no_preflight,
         )
 
         # Print summary
@@ -207,6 +208,7 @@ def main() -> None:
     p_run.add_argument("--prefer", help="Comma-separated preferred server names")
     p_run.add_argument("--only-servers", help="Comma-separated server names to restrict to")
     p_run.add_argument("--ssh-timeout", type=int, default=10)
+    p_run.add_argument("--no-preflight", action="store_true", help="Skip pre-flight server checks")
 
     # --- list ---
     p_list = subs.add_parser("list", help="List tracked jobs")

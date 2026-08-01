@@ -58,6 +58,7 @@ class JobDefaults(BaseModel):
     env: dict[str, str] = {}
     overrides: dict[str, Any] = {}
     path_remap: list[PathRemapRule] = []
+    exp_group: str = ""  # experiment registry group (e.g. group_09_cps_mode_win)
 
 
 class JobConfig(BaseModel):
