@@ -1,0 +1,41 @@
+# DATA-KIMODO-NATURAL-LOCO-HLOCK-019 Phase B — data collection.
+# 50 motions x 40 samples = ~2000 episodes (deterministic). One GPU.
+#
+# Runs ONLY on 4090-3 (primary): /tmp/IsaacLab must be writable for the URDF->USD
+# converter (on 4090-1/2/4/5 that dir is owned by another user), and the conda env
+# is local there. Bare `python` is used (not {python}) to avoid the launcher's
+# PID-wrapper single-quote nesting in `screen -c '...'`. PATH is set via env so
+# `python` resolves to the pegasusmodye conda env.
+# Invocation = collect_dataset.sh flags (--headless --mode deterministic
+# --output_dir artifacts/DATA-KIMODO-NATURAL-LOCO-HLOCK --motion_file
+# "DATA-KIMODO-NATURAL-LOCO-HLOCK/batch_raw/framework_raw/*"
+# --samples_per_motion 40 --num_envs 1000) + stall watchdog 0.90 (manifest gate).
+name: prdp-natural-loco-hlock-collect
+project: pegasusmodye
+description: "Data collection: DATA-KIMODO-NATURAL-LOCO-HLOCK, 50 motions x 40 samples ~= 2000 eps (4090-3)"
+
+defaults:
+  work_dir: /data/masteryip/PegasusMoDye/RLTracker
+  python: /data/conda/envs/pegasusmodye/bin/python
+  log_dir: /data/masteryip/PegasusMoDye/agent-runs/gpu-jobs-logs
+  env:
+    OMNI_KIT_ACCEPT_EULA: "YES"
+    PYTHONNOUSERSITE: "1"
+    PATH: "/data/conda/envs/pegasusmodye/bin:/usr/local/bin:/usr/bin:/bin"
+    PYTHONPATH: "/data/masteryip/PegasusMoDye/PDPlanner:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab_assets:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab_mimic:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab_rl:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab_tasks:/data/masteryip/PegasusMoDye/MoDyeEnc:/data/masteryip/PegasusMoDye/MoDyeEnc/src:/data/masteryip/PegasusMoDye/RLTracker/source/rl_tracker:/data/masteryip/PegasusMoDye/deps/train/rsl_rl-modular-normed"
+
+  path_remap:
+    - match: "4090-"
+      exclude: ["4090-3"]
+      map:
+        "/data/masteryip/": "/mnt/4090-3/masteryip/"
+        "/data/conda/": "/mnt/4090-3/conda/"
+
+command: |
+  cd {work_dir}
+  export CUDA_VISIBLE_DEVICES
+  python scripts/data_collection/data_collection.py visualization.headless=true collection.mode=deterministic output.dir=artifacts/DATA-KIMODO-NATURAL-LOCO-HLOCK "motion.pattern=DATA-KIMODO-NATURAL-LOCO-HLOCK/batch_raw/framework_raw/*" collection.samples_per_motion=40 task.num_envs=1000 collection.stall_progress_threshold=0.90 >> {log_file} 2>&1
+
+tasks:
+  - name: hlock-collect
+    gpu_min_memory_mb: 8000

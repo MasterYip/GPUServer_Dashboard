@@ -1,0 +1,66 @@
+# DATA-KIMODO-NATURAL-LOCO-HLOCK-019 Phase D — cross_attn_mode (full/state)
+# ablation on the DATA-KIMODO-NATURAL-LOCO-HLOCK dyed zarr. 4 runs, 50 epochs.
+#
+# Code pinned to the PDPlanner worktree at
+# /data/masteryip/PegasusMoDye/agent-worktrees/DATA-KIMODO-NATURAL-LOCO-HLOCK-019-PDPlanner
+#   branch agent/DATA-KIMODO-NATURAL-LOCO-HLOCK-019 @ d0bcc59b (base NL016 lineage,
+#   configs have cross_attn_window COMMENTED = global, cross_attn_mode "full" default).
+# Entry point train_exp_mode.py (auto-registry), group group_03_xstream.
+#
+# Per-task `cfg` selects g1prdp_diffuse vs g1prdp_cond_diffuse; cross_attn_mode
+# is the ONLY ablation key. cross_attn_window stays at the config's global
+# (commented -> null) value - do NOT override it. --gpu NOT passed (cli.py
+# injects CUDA_VISIBLE_DEVICES; command exports it for persistence).
+name: prdp-natural-loco-hlock
+project: pegasusmodye
+description: "DATA-KIMODO-NATURAL-LOCO-HLOCK-019 Phase D: cross_attn_mode ablation (diffuse/cond x full/state) on HLOCK dyed zarr, 50 epochs"
+
+defaults:
+  work_dir: /data/masteryip/PegasusMoDye/agent-worktrees/DATA-KIMODO-NATURAL-LOCO-HLOCK-019-PDPlanner
+  python: /data/conda/envs/pegasusmodye/bin/python
+  cfg: g1prdp_cond_diffuse.yaml
+  log_dir: /data/masteryip/PegasusMoDye/agent-runs/gpu-jobs-logs
+  exp_group: group_03_xstream
+  env:
+    OMNI_KIT_ACCEPT_EULA: "YES"
+    PYTHONPATH: /data/masteryip/PegasusMoDye/agent-worktrees/DATA-KIMODO-NATURAL-LOCO-HLOCK-019-PDPlanner
+    PYTHONNOUSERSITE: "1"
+  overrides:
+    dataset.zarr_path: /data/masteryip/PegasusMoDye/RLTracker/artifacts/DATA-KIMODO-NATURAL-LOCO-HLOCK/motion_dyed_text_t0.01.zarr
+    training.num_epochs: 50
+    training.tqdm_interval_sec: 30
+    logging.mode: offline
+
+  path_remap:
+    - match: "4090-"
+      exclude: ["4090-3"]
+      map:
+        "/data/masteryip/": "/mnt/4090-3/masteryip/"
+        "/data/conda/": "/mnt/4090-3/conda/"
+
+command: |
+  cd {work_dir}
+  export CUDA_VISIBLE_DEVICES
+  PY={python}
+  $PY train_exp_mode.py --cfg {cfg} --exp_name {exp_name} --group {exp_group} {overrides} logging.name={exp_name} >> {log_file} 2>&1
+
+tasks:
+  - name: hlock_diffuse_full
+    cfg: g1prdp_diffuse.yaml
+    overrides:
+      policy.actor.backbone.cross_attn_mode: full
+
+  - name: hlock_diffuse_state
+    cfg: g1prdp_diffuse.yaml
+    overrides:
+      policy.actor.backbone.cross_attn_mode: state
+
+  - name: hlock_cond_full
+    cfg: g1prdp_cond_diffuse.yaml
+    overrides:
+      policy.actor.backbone.cross_attn_mode: full
+
+  - name: hlock_cond_state
+    cfg: g1prdp_cond_diffuse.yaml
+    overrides:
+      policy.actor.backbone.cross_attn_mode: state

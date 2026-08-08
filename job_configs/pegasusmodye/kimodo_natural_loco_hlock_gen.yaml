@@ -1,0 +1,70 @@
+# DATA-KIMODO-NATURAL-LOCO-HLOCK-019 Phase A — height-locked 50-motion
+# generation on 4090-3 (primary).  Runs the adapted hlock config through the
+# framework list-API pipeline (chunked x7) and asserts exactly 50 framework_raw
+# + motions motion.npz.  Root-FS-safe (all caches/tmp on /data).
+#
+# Worktree: /data/masteryip/kimodo/kimodo-agent-worktrees/DATA-KIMODO-NATURAL-LOCO-HLOCK-019
+#   branch agent/DATA-KIMODO-NATURAL-LOCO-HLOCK-019 @ 8bb9b7d (base main 01a114b).
+# Config: scripts/locomotion_framework/configs/g1_natural_loco_hlock.yaml
+#   output_dir -> DATA-KIMODO-NATURAL-LOCO-HLOCK/batch_raw, num_samples 6/7 -> 50.
+# Script: scripts/locomotion_framework/generate_natural_loco.py (committed on worktree).
+#
+# Restrict launch to 4090-3: cli.py run <yaml> --only-servers 4090-3
+name: kimodo-natural-loco-hlock-019-gen
+project: pegasusmodye
+description: "DATA-KIMODO-NATURAL-LOCO-HLOCK-019 Phase A: generate 50 height-locked natural-loco motions (kimodo) on 4090-3"
+
+defaults:
+  work_dir: /data/masteryip/kimodo/kimodo-agent-worktrees/DATA-KIMODO-NATURAL-LOCO-HLOCK-019
+  python: /data/masteryip/kimodo/.venv/bin/python
+  log_dir: /data/masteryip/PegasusMoDye/agent-runs/gpu-jobs-logs
+  env:
+    PYTHONUNBUFFERED: "1"
+  overrides: {}
+
+command: |
+  cd {work_dir}
+  export CUDA_VISIBLE_DEVICES
+  source scripts/env.sh
+  exec > {log_file} 2>&1
+  export LOCAL_CACHE=True
+  export TEXT_ENCODER_MODE=local
+  export TEXT_ENCODER=llm2vec-nf4
+  export GENERATION_SERVER_NAME=4090-3
+  # ROOT-FS SAFE: everything on /data.
+  export TORCHINDUCTOR_CACHE_DIR=/data/masteryip/kimodo/.cache/torchinductor
+  export XDG_CACHE_HOME=/data/masteryip/kimodo/.cache/xdg
+  export TMPDIR=/data/masteryip/kimodo/.cache/tmp
+  export TMP=/data/masteryip/kimodo/.cache/tmp
+  export TEMP=/data/masteryip/kimodo/.cache/tmp
+  export MPLCONFIGDIR=/data/masteryip/kimodo/.cache/matplotlib
+  export CUDA_CACHE_PATH=/data/masteryip/kimodo/.cache/cuda
+  OUT=/data/masteryip/kimodo/datasets/DATA-KIMODO-NATURAL-LOCO-HLOCK/batch_raw
+  PY={python}
+  mkdir -p /data/masteryip/kimodo/.cache/tmp "$OUT"
+  echo START_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  echo HOST=$(hostname)
+  echo GPU=$CUDA_VISIBLE_DEVICES
+  echo "=== hlock generation (50 motions, chunked x7) ==="
+  rm -rf "$OUT"
+  PYTHONPATH=. $PY scripts/locomotion_framework/generate_natural_loco.py \
+    --config scripts/locomotion_framework/configs/g1_natural_loco_hlock.yaml \
+    --output "$OUT" --gpu 0 --chunk-size 7 2>&1 | tail -80
+  echo "=== artifact inventory ==="
+  echo "replay motions: $(find "$OUT/motions" -name motion.npz | wc -l)"
+  echo "framework_raw: $(find "$OUT/framework_raw" -name motion.npz | wc -l)"
+  test "$(find "$OUT/motions" -name motion.npz | wc -l)" -eq 50
+  test "$(find "$OUT/framework_raw" -name motion.npz | wc -l)" -eq 50
+  echo "=== per-direction count ==="
+  for d in d00_forward d01_forward_right d02_right d03_backward_right d04_backward d05_backward_left d06_left d07_forward_left; do
+    c=$(find "$OUT/motions" -maxdepth 1 -type d -name "${d}_*" | wc -l)
+    echo "$d: $c"
+  done
+  echo "=== SHA256SUMS head ==="
+  head -3 "$OUT/SHA256SUMS"
+  echo END_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  echo HLOCK_GEN_DONE
+
+tasks:
+  - name: gen-hlock
+    gpu_min_memory_mb: 18000

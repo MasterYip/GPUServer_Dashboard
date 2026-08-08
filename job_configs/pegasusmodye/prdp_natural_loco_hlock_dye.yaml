@@ -1,0 +1,32 @@
+# DATA-KIMODO-NATURAL-LOCO-HLOCK-019 Phase C — dyeing (MoDyeEnc CLIP text-aligned)
+# Runs ONLY on 4090-3 (conda env + /data paths local; editable-install /data paths work).
+# Bare `python` via env PATH (avoid launcher PID-wrapper quoting); PYTHONPATH covers the
+# editable source dirs (diffusion_policy, isaaclab*, rl_tracker, rsl_rl, motionclip/MoDyeEnc).
+name: prdp-natural-loco-hlock-dye
+project: pegasusmodye
+description: "Dyeing: DATA-KIMODO-NATURAL-LOCO-HLOCK motion.zarr -> motion_dyed_text_t0.01.zarr (text-aligned CLIP)"
+
+defaults:
+  work_dir: /data/masteryip/PegasusMoDye/RLTracker
+  python: /data/conda/envs/pegasusmodye/bin/python
+  log_dir: /data/masteryip/PegasusMoDye/agent-runs/gpu-jobs-logs
+  env:
+    OMNI_KIT_ACCEPT_EULA: "YES"
+    PYTHONNOUSERSITE: "1"
+    PATH: "/data/conda/envs/pegasusmodye/bin:/usr/local/bin:/usr/bin:/bin"
+    PYTHONPATH: "/data/masteryip/PegasusMoDye/PDPlanner:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab_assets:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab_mimic:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab_rl:/data/masteryip/PegasusMoDye/deps/train/IsaacLab/source/isaaclab_tasks:/data/masteryip/PegasusMoDye/MoDyeEnc:/data/masteryip/PegasusMoDye/MoDyeEnc/src:/data/masteryip/PegasusMoDye/RLTracker/source/rl_tracker:/data/masteryip/PegasusMoDye/deps/train/rsl_rl-modular-normed:/data/masteryip/PegasusMoDye/RLTracker/scripts/data_dyeing"
+
+  path_remap:
+    - match: "4090-"
+      exclude: ["4090-3"]
+      map:
+        "/data/masteryip/": "/mnt/4090-3/masteryip/"
+        "/data/conda/": "/mnt/4090-3/conda/"
+
+command: |
+  cd {work_dir}
+  python scripts/data_dyeing/data_dyeing.py input.zarr_path=artifacts/DATA-KIMODO-NATURAL-LOCO-HLOCK/motion.zarr "input.motion_pattern=DATA-KIMODO-NATURAL-LOCO-HLOCK/batch_raw/framework_raw/*" input.motion_base_path=artifacts motionclip.checkpoint_path=../MoDyeEnc/exps/g1-model-xyz-clip/checkpoint_0100.pth.tar output.zarr_path=artifacts/DATA-KIMODO-NATURAL-LOCO-HLOCK/motion_dyed_text_t0.01.zarr encoding.use_text_alignment=true encoding.vocabulary_path=/data/masteryip/PegasusMoDye/RLTracker/scripts/data_dyeing/text_vocab.yaml >> {log_file} 2>&1
+
+tasks:
+  - name: hlock-dye
+    gpu_min_memory_mb: 8000
