@@ -268,9 +268,13 @@ async def launch_job(
         )
         cmd = build_task_command(job, task, log_file, server_name=gpu.server_name)
 
+        # Apply path remap to the launch log_dir so the mkdir + pid file target
+        # the server-local path on non-primary servers (preflight already
+        # remaps log_dir; match it here so the launch mkdir does not fail).
+        launch_log_dir = _apply_path_remap(job.defaults.log_dir, gpu.server_name, job.defaults.path_remap)
         # Inject CUDA_VISIBLE_DEVICES directly on the python command line
         # (more reliable than export through screen's bash -c)
-        pid_file = os.path.join(job.defaults.log_dir, job.project, job.name, f"{task.name}.pid")
+        pid_file = os.path.join(launch_log_dir, job.project, job.name, f"{task.name}.pid")
         cmd = cmd.replace("\n", f"\nCUDA_VISIBLE_DEVICES={gpu.gpu_index} ", 1)
         # Capture PID: wrap python in subshell that writes PID to file
         cmd = cmd.replace(
@@ -280,7 +284,7 @@ async def launch_job(
         )
 
         full_cmd = (
-            f"mkdir -p {job.defaults.log_dir}/{job.project}/{job.name} && "
+            f"mkdir -p {launch_log_dir}/{job.project}/{job.name} && "
             f"screen -dmS {screen_name} bash -c '{cmd}'"
         )
         if job.defaults.env:

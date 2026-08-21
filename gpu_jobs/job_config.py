@@ -87,7 +87,7 @@ def build_task_command(
     vars_dict: dict[str, str] = {
         "work_dir": config.defaults.work_dir,
         "python": config.defaults.python,
-        "cfg": config.defaults.cfg,
+        "cfg": task.cfg or config.defaults.cfg,
         "log_dir": config.defaults.log_dir,
         "log_file": log_file,
         "exp_name": task.name,

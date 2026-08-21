@@ -34,6 +34,7 @@ class TaskSpec(BaseModel):
     name: str  # used for screen session name + log filename
     overrides: dict[str, Any] = {}
     gpu_min_memory_mb: int = 4000
+    cfg: Optional[str] = None  # per-task config override (falls back to defaults.cfg)
 
 
 class PathRemapRule(BaseModel):

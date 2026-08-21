@@ -8,7 +8,7 @@ from .models import GpuCandidate
 
 def find_free_gpus(
     metrics: dict[str, ServerMetrics],
-    min_free_memory_mb: float = 4000,
+    min_free_memory_mb: float = 12000,
     max_gpu_util_pct: float = 30.0,
     preferred_servers: list[str] | None = None,
     exclude_gpus: set[tuple[str, int]] | None = None,
